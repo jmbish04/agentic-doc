@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8" />
+    <style>
+      :root { --bg:#fafafa; --panel:#fff; --text:#222; --muted:#6b7280; --border:#e5e7eb; --accent:#2563eb; }
+      body { margin:0; font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:var(--bg); color:var(--text); }
+      .wrap { padding:12px; }
+      .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+      .header { padding:12px 14px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+      .title { font-weight:600; }
+      .settings { color:var(--muted); font-size:12px; cursor:pointer; }
+      .body { padding:10px 12px; }
+      .chat { height:320px; overflow:auto; border:1px solid var(--border); border-radius:10px; padding:10px; background:#fff; }
+      .msg { margin:8px 0; }
+      .role { font-size:12px; color:var(--muted); margin-bottom:3px; }
+      .bubble { background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:8px 10px; }
+      .bubble.me { background:#eef2ff; border-color:#e0e7ff; }
+      .row { display:flex; gap:8px; align-items:center; margin-top:10px; }
+      input[type="text"], input[type="password"], textarea { width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:10px; outline:none; }
+      textarea { resize:vertical; min-height:48px; }
+      button { background:var(--accent); color:#fff; border:none; border-radius:10px; padding:8px 12px; font-weight:600; cursor:pointer; }
+      button:disabled { opacity:.6; cursor:not-allowed; }
+      .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+      .muted { color:var(--muted); font-size:12px; }
+      .switch { display:flex; align-items:center; gap:8px; margin-top:4px; }
+      .kv { padding:8px; background:#f9fafb; border:1px dashed var(--border); border-radius:10px; font-size:12px; color:var(--muted); }
+      .actions { margin-top:8px; display:flex; gap:8px; justify-content:flex-end; }
+      .small { font-size:12px; }
+      .ok { color:#16a34a; }
+      .err { color:#dc2626; }
+      .pill { display:inline-block; padding:2px 8px; background:#eef2ff; border:1px solid #e0e7ff; border-radius:999px; font-size:12px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="header">
+          <div class="title">Google Docs × OpenAI</div>
+          <div class="settings" onclick="toggleSettings()">Settings</div>
+        </div>
+        <div class="body">
+          <div id="settings" style="display:none;">
+            <div class="grid">
+              <div>
+                <div class="muted">API Base</div>
+                <input id="apiBase" type="text" placeholder="https://api.openai.com/v1" />
+              </div>
+              <div>
+                <div class="muted">Model</div>
+                <input id="model" type="text" placeholder="gpt-4o-mini" />
+              </div>
+            </div>
+            <div style="margin-top:8px;">
+              <div class="muted">API Key</div>
+              <input id="apiKey" type="password" placeholder="sk-..." />
+              <div class="switch">
+                <input id="allowEdits" type="checkbox" />
+                <label for="allowEdits">Allow the assistant to edit this doc</label>
+              </div>
+            </div>
+            <div style="margin-top:8px;">
+              <div class="muted">System Prompt</div>
+              <textarea id="systemPrompt" placeholder="System behavior..."></textarea>
+            </div>
+            <div class="actions">
+              <button onclick="save()">Save</button>
+              <button onclick="resetConv()" style="background:#64748b">Reset Thread</button>
+            </div>
+            <div id="saveStatus" class="small" style="margin-top:6px;"></div>
+            <hr style="margin:12px 0;">
+          </div>
+
+          <div class="chat" id="chat"></div>
+
+          <div class="row">
+            <textarea id="msg" placeholder="Ask the assistant... e.g., “Insert a heading and summarize the complaint.”"></textarea>
+          </div>
+          <div class="actions">
+            <span id="hint" class="muted small">Tools: <span class="pill">insert_text</span> <span class="pill">replace_text</span> <span class="pill">insert_image</span> <span class="pill">insert_heading</span> <span class="pill">insert_table</span></span>
+            <button id="sendBtn" onclick="send()">Send</button>
+          </div>
+          <div id="status" class="small" style="margin-top:6px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const CHAT = document.getElementById("chat");
+      const STATUS = document.getElementById("status");
+      const SAVE = document.getElementById("saveStatus");
+
+      // Prefill from server
+      google.script.run.withSuccessHandler(({apiBase, apiKey, model, systemPrompt}) => {
+        document.getElementById("apiBase").value = apiBase || "";
+        document.getElementById("apiKey").value = apiKey || "";
+        document.getElementById("model").value = model || "";
+        document.getElementById("systemPrompt").value = systemPrompt || "";
+      }).getServerSettings();
+
+      function toggleSettings(){
+        const el = document.getElementById("settings");
+        el.style.display = el.style.display === "none" ? "block" : "none";
+      }
+
+      function save(){
+        SAVE.textContent = "Saving…";
+        const payload = {
+          apiBase: document.getElementById("apiBase").value.trim(),
+          apiKey: document.getElementById("apiKey").value.trim(),
+          model: document.getElementById("model").value.trim(),
+          systemPrompt: document.getElementById("systemPrompt").value
+        };
+        google.script.run.withSuccessHandler(() => {
+          SAVE.innerHTML = "<span class='ok'>Saved</span>";
+        }).saveSettings(payload);
+      }
+
+      function resetConv(){
+        google.script.run.withSuccessHandler(() => {
+          addMsg("system","Conversation reset.");
+        }).resetConversation();
+      }
+
+      function addMsg(role, text){
+        const div = document.createElement("div");
+        div.className = "msg";
+        div.innerHTML = `<div class="role">${role}</div><div class="bubble ${role==='user'?'me':''}">${escapeHtml(text)}</div>`;
+        CHAT.appendChild(div);
+        CHAT.scrollTop = CHAT.scrollHeight;
+      }
+
+      function escapeHtml(s){
+        const div = document.createElement("div");
+        div.innerText = s;
+        return div.innerHTML;
+      }
+
+      function send(){
+        const allowEdits = document.getElementById("allowEdits").checked;
+        const text = document.getElementById("msg").value.trim();
+        if (!text) return;
+        document.getElementById("msg").value = "";
+        addMsg("user", text);
+
+        STATUS.textContent = "Thinking… (the model may call tools to edit this doc)";
+        document.getElementById("sendBtn").disabled = true;
+
+        google.script.run.withSuccessHandler((res) => {
+          document.getElementById("sendBtn").disabled = false;
+          if (!res || !res.ok) {
+            STATUS.innerHTML = "<span class='err'>Error.</span>";
+            return;
+          }
+          const txt = res.finalText || "(no text)";
+          addMsg("assistant", txt);
+          if (res.actions && res.actions.length) {
+            const applied = res.actions.map(a => `• ${a.name}`).join("<br>");
+            STATUS.innerHTML = `<span class='ok'>Applied tools:</span><br>${applied}`;
+          } else {
+            STATUS.textContent = "Done.";
+          }
+        }).serverSendMessage({ text, allowEdits });
+      }
+    </script>
+  </body>
+</html>
